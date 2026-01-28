@@ -5,7 +5,7 @@ on:
     inputs:
       # Event context (must be passed by caller)
       pr_merged:
-        description: 'Whether the PR was merged (true/false)'
+        description: 'Whether the PR was merged (pass: github.event.pull_request.merged == true)'
         required: true
         type: boolean
       pr_body:
