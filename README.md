@@ -101,6 +101,12 @@ concurrency:
 
 jobs:
   worker:
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      id-token: write
+      actions: read
     uses: geastwood/github-workflow-templates/.github/workflows/agent-worker.yml@main
     with:
       agent_prompt: "You are working on MyProject, a Next.js application."
@@ -112,8 +118,34 @@ jobs:
       event_action: ${{ github.event.action }}
       env_vars: |
         DATABASE_URL=postgresql://ci:ci@localhost:5432/ci_db
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+```
+
+### Example: PR Merged Labels
+
+```yaml
+# .github/workflows/pr-merged-labels.yml
+name: PR Merged Labels
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+jobs:
+  labels:
+    permissions:
+      issues: write
+      pull-requests: read
+    uses: geastwood/github-workflow-templates/.github/workflows/pr-merged-labels.yml@main
+    with:
+      pr_merged: ${{ github.event.pull_request.merged }}
+      pr_body: ${{ github.event.pull_request.body || '' }}
+      pr_number: ${{ format('{0}', github.event.pull_request.number) }}
     secrets: inherit
 ```
+
+> **Note**: The `permissions` block is required if your repo's default workflow permissions are set to read-only. Without it, the workflow will fail with `startup_failure`.
 
 ## Issue Templates
 
@@ -151,6 +183,29 @@ cp issue-templates/*.md /path/to/your-repo/.github/ISSUE_TEMPLATE/
 
 - `CLAUDE_CODE_OAUTH_TOKEN` — Required for all Claude-powered workflows
 - `GITHUB_TOKEN` — Automatically provided by GitHub Actions
+
+## Agent Behavior
+
+### Pre-PR Validation
+
+The agent worker enforces strict validation before creating a PR:
+
+1. Runs all checks: install, typecheck, lint, build
+2. Fixes errors and re-runs checks until all pass
+3. Only creates a PR after all checks pass
+4. If checks can't be fixed after 3 attempts, marks the issue as `agent:blocked`
+
+### Merge Conflict Handling
+
+When a PR has merge conflicts, both the **issue** and **PR** are labeled `needs-human`:
+
+- Issue: `agent:in-progress` → `needs-human`
+- PR: `needs-human` label added
+- A comment is posted explaining human intervention is needed
+
+### CI Fix Retries
+
+The `agent-ci-fix` workflow automatically attempts to fix CI failures on agent branches. If it fails after `max_retries` attempts, both the PR and connected issue get the `needs-human` label.
 
 ## Kill Switch
 
