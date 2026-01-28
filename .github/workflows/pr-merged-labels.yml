@@ -5,9 +5,9 @@ on:
     inputs:
       # Event context (must be passed by caller)
       pr_merged:
-        description: 'Whether the PR was merged (pass: github.event.pull_request.merged == true)'
+        description: 'Whether the PR was merged (true/false)'
         required: true
-        type: boolean
+        type: string
       pr_body:
         description: 'PR body text'
         required: false
@@ -20,7 +20,7 @@ on:
 
 jobs:
   label-connected-issues:
-    if: inputs.pr_merged == true
+    if: inputs.pr_merged == 'true'
     runs-on: ubuntu-latest
 
     permissions:
