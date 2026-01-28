@@ -48,6 +48,17 @@ on:
         required: false
         type: string
         default: ''
+      # Event context (passed by caller)
+      event_name:
+        description: 'The github.event_name from the caller'
+        required: false
+        type: string
+        default: ''
+      pr_number:
+        description: 'Pull request number (for labeling)'
+        required: false
+        type: string
+        default: ''
 
 jobs:
   build:
@@ -215,11 +226,8 @@ jobs:
           echo "passed=true" >> $GITHUB_OUTPUT
 
       - name: Add ci-passed label to PR
-        if: github.event_name == 'pull_request' && steps.check-results.outputs.passed == 'true'
+        if: inputs.pr_number != '' && steps.check-results.outputs.passed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          PR_NUMBER="${{ github.event.pull_request.number }}"
-          if [ -n "$PR_NUMBER" ]; then
-            gh pr edit "$PR_NUMBER" --add-label "ci-passed" --repo "${{ github.repository }}" || echo "Could not add label (label may not exist)"
-          fi
+          gh pr edit "${{ inputs.pr_number }}" --add-label "ci-passed" --repo "${{ github.repository }}" || echo "Could not add label (label may not exist)"

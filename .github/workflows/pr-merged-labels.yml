@@ -2,10 +2,25 @@ name: PR Merged Labels (Reusable)
 
 on:
   workflow_call:
+    inputs:
+      # Event context (must be passed by caller)
+      pr_merged:
+        description: 'Whether the PR was merged (true/false)'
+        required: true
+        type: boolean
+      pr_body:
+        description: 'PR body text'
+        required: false
+        type: string
+        default: ''
+      pr_number:
+        description: 'PR number'
+        required: true
+        type: string
 
 jobs:
   label-connected-issues:
-    if: github.event.pull_request.merged == true
+    if: inputs.pr_merged == true
     runs-on: ubuntu-latest
 
     permissions:
@@ -16,9 +31,9 @@ jobs:
       - name: Add released label to connected issues
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_BODY: ${{ inputs.pr_body }}
         run: |
-          PR_BODY="${{ github.event.pull_request.body }}"
-          PR_NUMBER="${{ github.event.pull_request.number }}"
+          PR_NUMBER="${{ inputs.pr_number }}"
           REPO="${{ github.repository }}"
 
           echo "Processing merged PR #${PR_NUMBER}"

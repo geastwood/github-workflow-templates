@@ -48,6 +48,8 @@ This creates all required labels:
 
 Each consuming repo creates thin caller workflows that reference these templates.
 
+**Important**: Reusable workflows don't inherit the caller's `github.event` context. Callers must explicitly pass event data as inputs. See examples below.
+
 ### Example: CI
 
 ```yaml
@@ -69,6 +71,8 @@ jobs:
     with:
       package_manager: pnpm
       build_command: "pnpm build"
+      event_name: ${{ github.event_name }}
+      pr_number: ${{ github.event.pull_request.number && format('{0}', github.event.pull_request.number) || '' }}
       env_vars: |
         DATABASE_URL=postgresql://ci:ci@localhost:5432/ci_db
         NODE_ENV=test
@@ -93,6 +97,12 @@ jobs:
     uses: geastwood/github-workflow-templates/.github/workflows/agent-worker.yml@main
     with:
       agent_prompt: "You are working on MyProject, a Next.js application."
+      issue_number: ${{ format('{0}', github.event.issue.number) }}
+      issue_title: ${{ github.event.issue.title }}
+      issue_body: ${{ github.event.issue.body }}
+      label_name: ${{ github.event.label.name }}
+      issue_state: ${{ github.event.issue.state }}
+      event_action: ${{ github.event.action }}
       env_vars: |
         DATABASE_URL=postgresql://ci:ci@localhost:5432/ci_db
     secrets: inherit
@@ -128,10 +138,26 @@ cp issue-templates/*.md /path/to/your-repo/.github/ISSUE_TEMPLATE/
 | `agent_prompt` | `""` | Custom prompt with project context |
 | `max_issues_per_run` | `3` | Max issues coordinator creates |
 | `max_retries` | `3` | Max CI fix attempts |
-| `ci_workflow_name` | `"CI"` | CI workflow name to watch |
 | `agent_branch_prefixes` | `"agent/,claude/"` | Branch prefixes for auto-fix |
 
 ### Required Secrets
 
 - `CLAUDE_CODE_OAUTH_TOKEN` — Required for all Claude-powered workflows
 - `GITHUB_TOKEN` — Automatically provided by GitHub Actions
+
+## Kill Switch
+
+To pause all agent workflows in a repo, create a file at `.github/AGENTS_PAUSED`:
+
+```bash
+echo "Paused for maintenance" > .github/AGENTS_PAUSED
+git add .github/AGENTS_PAUSED && git commit -m "Pause agents" && git push
+```
+
+Remove it to resume:
+
+```bash
+git rm .github/AGENTS_PAUSED && git commit -m "Resume agents" && git push
+```
+
+The agent-worker, agent-coordinator, and agent-ci-fix workflows all check for this file before proceeding.

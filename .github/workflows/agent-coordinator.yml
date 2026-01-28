@@ -19,7 +19,7 @@ on:
         type: number
         default: 5
       scan_type:
-        description: 'Type of scan (passed from workflow_dispatch)'
+        description: 'Type of scan to perform'
         required: false
         type: string
         default: 'all'

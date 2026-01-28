@@ -3,6 +3,15 @@ name: Claude Code Review (Reusable)
 on:
   workflow_call:
     inputs:
+      # Event context (must be passed by caller)
+      pr_number:
+        description: 'Pull request number'
+        required: true
+        type: string
+      actor:
+        description: 'GitHub actor who triggered the event'
+        required: true
+        type: string
       skip_actor:
         description: 'GitHub actor to skip reviews for (e.g. claude[bot])'
         required: false
@@ -14,7 +23,7 @@ on:
 
 jobs:
   claude-review:
-    if: github.actor != inputs.skip_actor
+    if: inputs.actor != inputs.skip_actor
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -35,4 +44,4 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
-          prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
+          prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ inputs.pr_number }}'
