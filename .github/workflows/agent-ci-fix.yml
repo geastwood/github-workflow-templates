@@ -1,0 +1,267 @@
+name: Agent CI Fix (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      node_version:
+        description: 'Node.js version'
+        required: false
+        type: string
+        default: '20'
+      package_manager:
+        description: 'Package manager (pnpm, npm, yarn)'
+        required: false
+        type: string
+        default: 'pnpm'
+      pnpm_version:
+        description: 'pnpm version'
+        required: false
+        type: string
+        default: '9'
+      install_command:
+        description: 'Install command'
+        required: false
+        type: string
+        default: 'pnpm install --frozen-lockfile'
+      build_command:
+        description: 'Build command'
+        required: false
+        type: string
+        default: 'pnpm build'
+      lint_command:
+        description: 'Lint command'
+        required: false
+        type: string
+        default: 'pnpm lint'
+      typecheck_command:
+        description: 'Type check command'
+        required: false
+        type: string
+        default: 'pnpm type-check'
+      max_retries:
+        description: 'Maximum fix attempts before giving up'
+        required: false
+        type: number
+        default: 3
+      ci_workflow_name:
+        description: 'Name of the CI workflow to watch for failures'
+        required: false
+        type: string
+        default: 'CI'
+      agent_branch_prefixes:
+        description: 'Comma-separated branch prefixes that trigger auto-fix (e.g. agent/,claude/)'
+        required: false
+        type: string
+        default: 'agent/,claude/'
+      env_vars:
+        description: 'Newline-separated KEY=VALUE pairs for environment variables'
+        required: false
+        type: string
+        default: ''
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+
+jobs:
+  fix-ci:
+    if: |
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'failure' &&
+       github.event.workflow_run.event == 'pull_request') ||
+      github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: read
+      id-token: write
+
+    steps:
+      - name: Set branch name
+        id: branch
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "name=${{ github.event.inputs.branch }}" >> $GITHUB_OUTPUT
+          else
+            echo "name=${{ github.event.workflow_run.head_branch }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check branch prefix
+        id: check-branch
+        if: github.event_name == 'workflow_run'
+        run: |
+          BRANCH="${{ steps.branch.outputs.name }}"
+          PREFIXES="${{ inputs.agent_branch_prefixes }}"
+          MATCH="false"
+          IFS=',' read -ra PREFIX_ARRAY <<< "$PREFIXES"
+          for prefix in "${PREFIX_ARRAY[@]}"; do
+            if [[ "$BRANCH" == ${prefix}* ]]; then
+              MATCH="true"
+              break
+            fi
+          done
+          echo "match=$MATCH" >> $GITHUB_OUTPUT
+
+      - name: Checkout repository
+        if: steps.check-branch.outputs.match != 'false' || github.event_name == 'workflow_dispatch'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.branch.outputs.name }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set environment variables
+        if: (steps.check-branch.outputs.match != 'false' || github.event_name == 'workflow_dispatch') && inputs.env_vars != ''
+        run: |
+          echo "${{ inputs.env_vars }}" >> $GITHUB_ENV
+
+      - name: Check kill switch
+        id: kill-switch
+        if: steps.check-branch.outputs.match != 'false' || github.event_name == 'workflow_dispatch'
+        run: |
+          if [ -f ".github/AGENTS_PAUSED" ]; then
+            echo "paused=true" >> $GITHUB_OUTPUT
+            echo "::notice::Agent CI fix paused by kill switch"
+            exit 0
+          fi
+          echo "paused=false" >> $GITHUB_OUTPUT
+
+      - name: Get failed jobs info
+        id: failed-jobs
+        if: (steps.check-branch.outputs.match != 'false' || github.event_name == 'workflow_dispatch') && steps.kill-switch.outputs.paused != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RUN_ID="${{ github.event.workflow_run.id || github.event.inputs.run_id }}"
+
+          if [ -n "$RUN_ID" ]; then
+            FAILED_JOBS=$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID/jobs \
+              --jq '[.jobs[] | select(.conclusion == "failure") | {name: .name, steps: [.steps[] | select(.conclusion == "failure") | .name]}]' 2>/dev/null || echo "[]")
+          else
+            FAILED_JOBS="[]"
+          fi
+
+          echo "Failed jobs: $FAILED_JOBS"
+          echo "failed_jobs<<EOF" >> $GITHUB_OUTPUT
+          echo "$FAILED_JOBS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Check retry count
+        id: retry-check
+        if: (steps.check-branch.outputs.match != 'false' || github.event_name == 'workflow_dispatch') && steps.kill-switch.outputs.paused != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH="${{ steps.branch.outputs.name }}"
+
+          RECENT_RUNS=$(gh api repos/${{ github.repository }}/actions/runs \
+            --jq "[.workflow_runs[] | select(.name == \"Agent CI Fix\" and .head_branch == \"$BRANCH\" and .created_at > \"$(date -u -d '2 hours ago' +%Y-%m-%dT%H:%M:%SZ)\")] | length")
+
+          echo "Recent fix attempts: $RECENT_RUNS"
+
+          if [ "$RECENT_RUNS" -ge ${{ inputs.max_retries }} ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "::warning::Too many CI fix attempts (${RECENT_RUNS}). Marking as blocked."
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Comment on PR about fix attempt
+        if: (steps.check-branch.outputs.match != 'false' || github.event_name == 'workflow_dispatch') && steps.kill-switch.outputs.paused != 'true' && steps.retry-check.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ github.event.workflow_run.id || github.event.inputs.run_id || github.run_id }}
+        run: |
+          PR_NUMBER=$(gh pr list --head "${{ steps.branch.outputs.name }}" --json number --jq '.[0].number' || echo "")
+
+          if [ -n "$PR_NUMBER" ]; then
+            gh pr comment "$PR_NUMBER" --body "CI failed. Attempting automatic fix. View fix run: https://github.com/${{ github.repository }}/actions/runs/${RUN_ID}"
+          fi
+
+      - name: Fix CI errors
+        if: (steps.check-branch.outputs.match != 'false' || github.event_name == 'workflow_dispatch') && steps.kill-switch.outputs.paused != 'true' && steps.retry-check.outputs.skip != 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          allowed_bots: "claude[bot]"
+          claude_args: |
+            --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
+          additional_permissions: |
+            actions: read
+          prompt: |
+            You are an Agent CI Fixer. The CI pipeline has failed on branch `${{ steps.branch.outputs.name }}`.
+
+            ## Failed Jobs
+            ```json
+            ${{ steps.failed-jobs.outputs.failed_jobs }}
+            ```
+
+            ## CI Workflow Run
+            Run ID: ${{ github.event.workflow_run.id || github.event.inputs.run_id || 'N/A (manual trigger)' }}
+            URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id || github.event.inputs.run_id || '' }}
+
+            ## Your Task
+            1. First, reproduce the CI failure locally by running:
+               - `${{ inputs.install_command }}`
+               - `${{ inputs.typecheck_command }}` (for TypeScript errors)
+               - `${{ inputs.lint_command }}` (for linting errors)
+               - `${{ inputs.build_command }}` (for build errors)
+
+            2. Analyze the error output to understand what needs to be fixed
+
+            3. Fix the issues in the codebase
+
+            4. Verify the fix by running the same commands again
+
+            5. Commit and push the fix with a clear message like:
+               "fix: resolve CI errors (type-check/lint/build)"
+
+            ## Important Guidelines
+            - Only fix what's broken - don't refactor unrelated code
+            - If the error is unclear, check the workflow run logs via the GitHub API
+            - If you cannot fix the issue after 2 attempts, comment on the PR explaining what's wrong
+            - Never force push or modify git history
+
+      - name: Comment on successful fix
+        if: (steps.check-branch.outputs.match != 'false' || github.event_name == 'workflow_dispatch') && steps.kill-switch.outputs.paused != 'true' && steps.retry-check.outputs.skip != 'true' && success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          PR_INFO=$(gh pr list --head "${{ steps.branch.outputs.name }}" --json number,mergeable --jq '.[0]' || echo "")
+
+          if [ -n "$PR_INFO" ]; then
+            PR_NUMBER=$(echo "$PR_INFO" | jq -r '.number')
+            MERGEABLE=$(echo "$PR_INFO" | jq -r '.mergeable')
+
+            gh pr comment "$PR_NUMBER" --body "CI fix attempted. View fix details: https://github.com/${{ github.repository }}/actions/runs/${RUN_ID}"
+
+            if [ "$MERGEABLE" == "CONFLICTING" ]; then
+              gh pr edit "$PR_NUMBER" --add-label "needs-human" || true
+              gh pr comment "$PR_NUMBER" --body "This PR has **merge conflicts** that require human intervention to resolve."
+
+              ISSUE_NUM=$(gh pr view "$PR_NUMBER" --json body --jq '.body' | grep -oEi '(close[sd]?|fix(es|ed)?|resolve[sd]?)\s*#([0-9]+)' | grep -oE '[0-9]+' | head -1 || true)
+              if [ -n "$ISSUE_NUM" ]; then
+                gh issue edit "$ISSUE_NUM" --add-label "needs-human" || true
+              fi
+            fi
+          fi
+
+      - name: Handle max retries
+        if: (steps.check-branch.outputs.match != 'false' || github.event_name == 'workflow_dispatch') && steps.kill-switch.outputs.paused != 'true' && steps.retry-check.outputs.skip == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ github.event.workflow_run.id || github.event.inputs.run_id || github.run_id }}
+        run: |
+          PR_NUMBER=$(gh pr list --head "${{ steps.branch.outputs.name }}" --json number --jq '.[0].number' || echo "")
+
+          if [ -n "$PR_NUMBER" ]; then
+            gh pr comment "$PR_NUMBER" --body "CI Fix Failed - Multiple automatic fix attempts have failed. Human intervention required. View logs: https://github.com/${{ github.repository }}/actions/runs/${RUN_ID}"
+            gh pr edit "$PR_NUMBER" --add-label "needs-human" 2>/dev/null || true
+
+            ISSUE_NUM=$(gh pr view "$PR_NUMBER" --json body --jq '.body' | grep -oEi '(close[sd]?|fix(es|ed)?|resolve[sd]?)\s*#([0-9]+)' | grep -oE '[0-9]+' | head -1 || true)
+            if [ -n "$ISSUE_NUM" ]; then
+              gh issue edit "$ISSUE_NUM" --add-label "needs-human" || true
+            fi
+          fi

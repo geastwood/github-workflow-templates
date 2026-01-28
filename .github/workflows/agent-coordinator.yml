@@ -1,0 +1,140 @@
+name: Agent Coordinator (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      agent_prompt:
+        description: 'Custom coordinator prompt (project name and what to scan for)'
+        required: false
+        type: string
+        default: ''
+      max_issues_per_run:
+        description: 'Maximum issues to create per run'
+        required: false
+        type: number
+        default: 3
+      max_backlog:
+        description: 'Maximum pending + in-progress issues before stopping'
+        required: false
+        type: number
+        default: 5
+      scan_type:
+        description: 'Type of scan (passed from workflow_dispatch)'
+        required: false
+        type: string
+        default: 'all'
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+
+jobs:
+  scan-and-create-issues:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check kill switch
+        id: kill-switch
+        run: |
+          if [ -f ".github/AGENTS_PAUSED" ]; then
+            echo "paused=true" >> $GITHUB_OUTPUT
+            echo "::notice::Agents are paused. Remove .github/AGENTS_PAUSED to resume."
+          else
+            echo "paused=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run coordinator scan
+        if: steps.kill-switch.outputs.paused != 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            You are the Agent Coordinator. Your job is to scan the repository and create GitHub issues for maintenance tasks.
+            ${{ inputs.agent_prompt }}
+
+            ## Scan Parameters
+            - Scan type: ${{ inputs.scan_type }}
+            - Max issues to create: ${{ inputs.max_issues_per_run }}
+
+            ## Pre-flight Check
+            Before creating any issues, check the current agent workload:
+            1. Run `gh issue list --label "agent:pending" --state open --json number --jq 'length'`
+            2. Run `gh issue list --label "agent:in-progress" --state open --json number --jq 'length'`
+            3. If (pending + in-progress) >= ${{ inputs.max_backlog }}, do NOT create new issues - report the backlog instead
+            4. Otherwise, create at most (${{ inputs.max_backlog }} - pending - in-progress) issues, up to the max of ${{ inputs.max_issues_per_run }}
+
+            ## What to Scan For
+
+            ### 1. Test Gaps (if scan_type is 'all' or 'tests')
+            - Look for files in source directories that have no corresponding test files
+            - Prioritize: routers, services, and utility functions
+            - Skip: type definitions, constants, config files
+
+            ### 2. Documentation Drift (if scan_type is 'all' or 'docs')
+            - Compare documentation against actual codebase structure
+            - Look for outdated descriptions
+            - Check if new features are documented
+
+            ### 3. Code Quality (if scan_type is 'all' or 'quality')
+            - Find functions over 50 lines that could be refactored
+            - Look for TODO/FIXME comments that should be issues
+            - Identify potential code smells
+
+            ## Issue Creation Rules
+
+            1. Before creating an issue, search existing issues to avoid duplicates
+            2. Create max ${{ inputs.max_issues_per_run }} issues per run
+            3. Use these labels:
+               - `agent:pending` (always include)
+               - `agent:tests` for test coverage tasks
+               - `agent:docs` for documentation tasks
+               - `agent:refactor` for code quality tasks
+
+            4. Use this issue format:
+
+            ```
+            Title: [Agent Task] <brief description>
+
+            ## Context
+            <why this task is needed>
+
+            ## Task
+            <specific work to be done>
+
+            ## Acceptance Criteria
+            - [ ] <criterion 1>
+            - [ ] <criterion 2>
+
+            ## Files to Modify
+            - `path/to/file.ts`
+
+            ## Notes
+            <any additional context>
+            ```
+
+            ## Actions to Take
+
+            1. Scan the codebase according to the scan type
+            2. Identify up to ${{ inputs.max_issues_per_run }} actionable improvements
+            3. Check for duplicate issues
+            4. Create issues with proper labels
+            5. Report what you found and created
+
+            Use `gh issue create` to create issues. Use `gh issue list` to check for duplicates.
+
+          allowed_tools: |
+            Bash(gh issue:*)
+            Bash(gh api:*)
+            Read
+            Glob
+            Grep

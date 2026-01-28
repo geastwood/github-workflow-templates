@@ -1,0 +1,40 @@
+name: PR Merged Labels (Reusable)
+
+on:
+  workflow_call:
+
+jobs:
+  label-connected-issues:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+
+    permissions:
+      issues: write
+      pull-requests: read
+
+    steps:
+      - name: Add released label to connected issues
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_BODY="${{ github.event.pull_request.body }}"
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          REPO="${{ github.repository }}"
+
+          echo "Processing merged PR #${PR_NUMBER}"
+
+          ISSUES=$(echo "$PR_BODY" | grep -oEi '(close[sd]?|fix(es|ed)?|resolve[sd]?)\s*#([0-9]+)' | grep -oE '[0-9]+' || true)
+
+          if [ -z "$ISSUES" ]; then
+            echo "No connected issues found in PR body"
+            exit 0
+          fi
+
+          echo "Found connected issues: $ISSUES"
+
+          for ISSUE_NUM in $ISSUES; do
+            echo "Adding 'released' label to issue #${ISSUE_NUM}"
+            gh issue edit "$ISSUE_NUM" --add-label "released" --repo "$REPO" 2>/dev/null || echo "Could not add label to issue #${ISSUE_NUM}"
+          done
+
+          echo "Done processing connected issues"

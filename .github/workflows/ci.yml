@@ -1,0 +1,225 @@
+name: CI (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      node_version:
+        description: 'Node.js version'
+        required: false
+        type: string
+        default: '20'
+      package_manager:
+        description: 'Package manager (pnpm, npm, yarn)'
+        required: false
+        type: string
+        default: 'pnpm'
+      pnpm_version:
+        description: 'pnpm version (only used when package_manager is pnpm)'
+        required: false
+        type: string
+        default: '9'
+      install_command:
+        description: 'Install command'
+        required: false
+        type: string
+        default: 'pnpm install --frozen-lockfile'
+      build_command:
+        description: 'Build command'
+        required: false
+        type: string
+        default: 'pnpm build'
+      lint_command:
+        description: 'Lint command'
+        required: false
+        type: string
+        default: 'pnpm lint'
+      typecheck_command:
+        description: 'Type check command'
+        required: false
+        type: string
+        default: 'pnpm type-check'
+      test_command:
+        description: 'Test command'
+        required: false
+        type: string
+        default: 'pnpm test'
+      env_vars:
+        description: 'Newline-separated KEY=VALUE pairs for environment variables needed during build'
+        required: false
+        type: string
+        default: ''
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    env:
+      NODE_ENV: test
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        if: inputs.package_manager == 'pnpm'
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ inputs.pnpm_version }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: ${{ inputs.package_manager }}
+
+      - name: Set environment variables
+        if: inputs.env_vars != ''
+        run: |
+          echo "${{ inputs.env_vars }}" >> $GITHUB_ENV
+
+      - name: Install dependencies
+        run: ${{ inputs.install_command }}
+
+      - name: Build
+        run: ${{ inputs.build_command }}
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        if: inputs.package_manager == 'pnpm'
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ inputs.pnpm_version }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: ${{ inputs.package_manager }}
+
+      - name: Set environment variables
+        if: inputs.env_vars != ''
+        run: |
+          echo "${{ inputs.env_vars }}" >> $GITHUB_ENV
+
+      - name: Install dependencies
+        run: ${{ inputs.install_command }}
+
+      - name: Lint
+        run: ${{ inputs.lint_command }}
+
+  type-check:
+    name: Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        if: inputs.package_manager == 'pnpm'
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ inputs.pnpm_version }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: ${{ inputs.package_manager }}
+
+      - name: Set environment variables
+        if: inputs.env_vars != ''
+        run: |
+          echo "${{ inputs.env_vars }}" >> $GITHUB_ENV
+
+      - name: Install dependencies
+        run: ${{ inputs.install_command }}
+
+      - name: Type check
+        run: ${{ inputs.typecheck_command }}
+
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        if: inputs.package_manager == 'pnpm'
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ inputs.pnpm_version }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: ${{ inputs.package_manager }}
+
+      - name: Set environment variables
+        if: inputs.env_vars != ''
+        run: |
+          echo "${{ inputs.env_vars }}" >> $GITHUB_ENV
+
+      - name: Install dependencies
+        run: ${{ inputs.install_command }}
+
+      - name: Check if test script exists
+        id: check-test
+        run: |
+          if node -e "const pkg = require('./package.json'); process.exit(pkg.scripts && pkg.scripts.test ? 0 : 1)" 2>/dev/null; then
+            echo "has_tests=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_tests=false" >> $GITHUB_OUTPUT
+            echo "::notice::No test script found in package.json. Skipping tests."
+          fi
+
+      - name: Run tests
+        if: steps.check-test.outputs.has_tests == 'true'
+        run: ${{ inputs.test_command }}
+
+  ci-success:
+    name: CI Success
+    needs: [build, lint, type-check]
+    runs-on: ubuntu-latest
+    if: always()
+    permissions:
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Check all jobs passed
+        id: check-results
+        run: |
+          if [[ "${{ needs.build.result }}" != "success" ]]; then
+            echo "Build failed"
+            echo "passed=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          if [[ "${{ needs.lint.result }}" != "success" ]]; then
+            echo "Lint failed"
+            echo "passed=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          if [[ "${{ needs.type-check.result }}" != "success" ]]; then
+            echo "Type check failed"
+            echo "passed=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          echo "All CI checks passed!"
+          echo "passed=true" >> $GITHUB_OUTPUT
+
+      - name: Add ci-passed label to PR
+        if: github.event_name == 'pull_request' && steps.check-results.outputs.passed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          if [ -n "$PR_NUMBER" ]; then
+            gh pr edit "$PR_NUMBER" --add-label "ci-passed" --repo "${{ github.repository }}" || echo "Could not add label (label may not exist)"
+          fi

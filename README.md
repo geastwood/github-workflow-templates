@@ -1,0 +1,107 @@
+# GitHub Workflow Templates
+
+Reusable GitHub Actions workflows for use across multiple repositories.
+
+## Workflows
+
+| Workflow | Description |
+|----------|-------------|
+| `ci.yml` | CI pipeline (build, lint, type-check, test) |
+| `agent-worker.yml` | Autonomous agent that works on labeled issues |
+| `agent-coordinator.yml` | Scans codebase and creates maintenance issues |
+| `agent-ci-fix.yml` | Auto-fixes CI failures on agent branches |
+| `claude.yml` | Responds to `@claude` mentions in issues/PRs |
+| `claude-code-review.yml` | Automated PR code review |
+| `pr-merged-labels.yml` | Adds `released` label to issues when PR merges |
+
+## Usage
+
+Each consuming repo creates thin caller workflows that reference these templates.
+
+### Example: CI
+
+```yaml
+# .github/workflows/ci.yml
+name: CI
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    uses: geastwood/github-workflow-templates/.github/workflows/ci.yml@main
+    with:
+      package_manager: pnpm
+      build_command: "pnpm build"
+      env_vars: |
+        DATABASE_URL=postgresql://ci:ci@localhost:5432/ci_db
+        NODE_ENV=test
+    secrets: inherit
+```
+
+### Example: Agent Worker
+
+```yaml
+# .github/workflows/agent-worker.yml
+name: Agent Worker
+on:
+  issues:
+    types: [labeled]
+
+concurrency:
+  group: agent-worker-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  worker:
+    uses: geastwood/github-workflow-templates/.github/workflows/agent-worker.yml@main
+    with:
+      agent_prompt: "You are working on MyProject, a Next.js application."
+      env_vars: |
+        DATABASE_URL=postgresql://ci:ci@localhost:5432/ci_db
+    secrets: inherit
+```
+
+## Issue Templates
+
+Issue templates in `issue-templates/` must be manually copied into each repo's `.github/ISSUE_TEMPLATE/` directory — they cannot be shared via reusable workflows.
+
+```bash
+cp issue-templates/*.md /path/to/your-repo/.github/ISSUE_TEMPLATE/
+```
+
+## Configurable Inputs
+
+### Common inputs (CI, Agent Worker, Agent CI Fix)
+
+| Input | Default | Description |
+|-------|---------|-------------|
+| `node_version` | `"20"` | Node.js version |
+| `package_manager` | `"pnpm"` | pnpm, npm, or yarn |
+| `pnpm_version` | `"9"` | pnpm version (when using pnpm) |
+| `install_command` | `"pnpm install --frozen-lockfile"` | Install command |
+| `build_command` | `"pnpm build"` | Build command |
+| `lint_command` | `"pnpm lint"` | Lint command |
+| `typecheck_command` | `"pnpm type-check"` | Type check command |
+| `env_vars` | `""` | Newline-separated KEY=VALUE env vars |
+
+### Agent-specific inputs
+
+| Input | Default | Description |
+|-------|---------|-------------|
+| `agent_prompt` | `""` | Custom prompt with project context |
+| `max_issues_per_run` | `3` | Max issues coordinator creates |
+| `max_retries` | `3` | Max CI fix attempts |
+| `ci_workflow_name` | `"CI"` | CI workflow name to watch |
+| `agent_branch_prefixes` | `"agent/,claude/"` | Branch prefixes for auto-fix |
+
+### Required Secrets
+
+- `CLAUDE_CODE_OAUTH_TOKEN` — Required for all Claude-powered workflows
+- `GITHUB_TOKEN` — Automatically provided by GitHub Actions
