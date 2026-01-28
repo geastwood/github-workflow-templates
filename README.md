@@ -14,6 +14,36 @@ Reusable GitHub Actions workflows for use across multiple repositories.
 | `claude-code-review.yml` | Automated PR code review |
 | `pr-merged-labels.yml` | Adds `released` label to issues when PR merges |
 
+## Setup
+
+Before using these workflows, each consuming repo needs the required GitHub labels. Run the setup script:
+
+```bash
+# From the template repo directory
+./setup-labels.sh geastwood/rolekit-ai
+./setup-labels.sh geastwood/unisun-hub
+
+# Or from inside a repo (auto-detects)
+./setup-labels.sh
+```
+
+This creates all required labels:
+
+| Label | Purpose |
+|-------|---------|
+| `agent:pending` | Task waiting for an agent |
+| `agent:in-progress` | Agent is working on it |
+| `agent:done` | Agent completed the task |
+| `agent:blocked` | Agent needs help |
+| `agent:tests` | Test coverage task |
+| `agent:docs` | Documentation task |
+| `agent:refactor` | Refactoring task |
+| `agent:feature` | Feature implementation |
+| `agent:bugfix` | Bug fix task |
+| `needs-human` | Requires human intervention |
+| `ci-passed` | All CI checks passed |
+| `released` | Merged and released |
+
 ## Usage
 
 Each consuming repo creates thin caller workflows that reference these templates.
