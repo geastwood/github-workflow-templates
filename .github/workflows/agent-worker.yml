@@ -160,12 +160,21 @@ jobs:
             ## Task
             1. Understand the issue
             2. Implement the solution
-            3. Run: ${{ inputs.install_command }} && ${{ inputs.typecheck_command }} && ${{ inputs.lint_command }} && ${{ inputs.build_command }}
-            4. Create branch: agent/${{ inputs.issue_number }}-<slug>
-            5. Commit and push
-            6. Create PR with "Closes #${{ inputs.issue_number }}"
+            3. **VERIFY your changes**: Run ALL checks and fix any errors:
+               - ${{ inputs.install_command }}
+               - ${{ inputs.typecheck_command }}
+               - ${{ inputs.lint_command }}
+               - ${{ inputs.build_command }}
+            4. **CRITICAL**: If ANY check fails, fix the errors and re-run ALL checks. Do NOT proceed until all checks pass.
+            5. Only after ALL checks pass: Create branch agent/${{ inputs.issue_number }}-<slug>
+            6. Commit and push
+            7. Create PR with "Closes #${{ inputs.issue_number }}"
 
-            If stuck, add agent:blocked label and comment explaining the issue.
+            ## Important Rules
+            - NEVER create a PR if typecheck, lint, or build fails
+            - ALWAYS run checks after making code changes
+            - Fix ALL errors before committing - do not leave broken code
+            - If you cannot fix an error after 3 attempts, add agent:blocked label and explain the issue
 
       - name: Handle completion
         if: steps.kill-switch.outputs.paused != 'true' && steps.claim.outcome == 'success' && always()
