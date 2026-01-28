@@ -1,0 +1,260 @@
+name: Agent Merge Conflict Resolver (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      node_version:
+        description: 'Node.js version'
+        required: false
+        type: string
+        default: '20'
+      package_manager:
+        description: 'Package manager (pnpm, npm, yarn)'
+        required: false
+        type: string
+        default: 'pnpm'
+      pnpm_version:
+        description: 'pnpm version'
+        required: false
+        type: string
+        default: '9'
+      install_command:
+        description: 'Install command'
+        required: false
+        type: string
+        default: 'pnpm install --frozen-lockfile'
+      build_command:
+        description: 'Build command'
+        required: false
+        type: string
+        default: 'pnpm build'
+      lint_command:
+        description: 'Lint command'
+        required: false
+        type: string
+        default: 'pnpm lint'
+      typecheck_command:
+        description: 'Type check command'
+        required: false
+        type: string
+        default: 'pnpm type-check'
+      agent_prompt:
+        description: 'Custom agent prompt (project name and conventions)'
+        required: false
+        type: string
+        default: ''
+      env_vars:
+        description: 'Newline-separated KEY=VALUE pairs for environment variables'
+        required: false
+        type: string
+        default: ''
+      base_branch:
+        description: 'Base branch to merge from (e.g. main)'
+        required: false
+        type: string
+        default: 'main'
+      agent_branch_prefixes:
+        description: 'Comma-separated branch prefixes that trigger auto-resolve (e.g. agent/,claude/)'
+        required: false
+        type: string
+        default: 'agent/,claude/'
+      # Event context (must be passed by caller)
+      pr_number:
+        description: 'PR number'
+        required: true
+        type: string
+      head_branch:
+        description: 'PR head branch name'
+        required: true
+        type: string
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+
+jobs:
+  resolve-conflicts:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      id-token: write
+      actions: read
+
+    steps:
+      - name: Check branch prefix
+        id: check-branch
+        run: |
+          BRANCH="${{ inputs.head_branch }}"
+          PREFIXES="${{ inputs.agent_branch_prefixes }}"
+          MATCH="false"
+          IFS=',' read -ra PREFIX_ARRAY <<< "$PREFIXES"
+          for prefix in "${PREFIX_ARRAY[@]}"; do
+            if [[ "$BRANCH" == ${prefix}* ]]; then
+              MATCH="true"
+              break
+            fi
+          done
+          echo "match=$MATCH" >> $GITHUB_OUTPUT
+
+      - name: Check if PR has merge conflicts
+        id: check-conflicts
+        if: steps.check-branch.outputs.match == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # GitHub needs a moment to compute mergeable status
+          sleep 5
+          MERGEABLE=$(gh pr view ${{ inputs.pr_number }} --json mergeable --jq '.mergeable' 2>/dev/null || echo "UNKNOWN")
+          echo "mergeable=$MERGEABLE" >> $GITHUB_OUTPUT
+
+          if [ "$MERGEABLE" != "CONFLICTING" ]; then
+            echo "::notice::PR #${{ inputs.pr_number }} is not conflicting (status: $MERGEABLE). Skipping."
+          fi
+
+      - name: Checkout repository
+        if: steps.check-branch.outputs.match == 'true' && steps.check-conflicts.outputs.mergeable == 'CONFLICTING'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.head_branch }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup pnpm
+        if: steps.check-branch.outputs.match == 'true' && steps.check-conflicts.outputs.mergeable == 'CONFLICTING' && inputs.package_manager == 'pnpm'
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ inputs.pnpm_version }}
+
+      - name: Setup Node.js
+        if: steps.check-branch.outputs.match == 'true' && steps.check-conflicts.outputs.mergeable == 'CONFLICTING'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: ${{ inputs.package_manager }}
+
+      - name: Set environment variables
+        if: steps.check-branch.outputs.match == 'true' && steps.check-conflicts.outputs.mergeable == 'CONFLICTING' && inputs.env_vars != ''
+        run: |
+          echo "${{ inputs.env_vars }}" >> $GITHUB_ENV
+
+      - name: Check kill switch
+        id: kill-switch
+        if: steps.check-branch.outputs.match == 'true' && steps.check-conflicts.outputs.mergeable == 'CONFLICTING'
+        run: |
+          if [ -f ".github/AGENTS_PAUSED" ]; then
+            echo "paused=true" >> $GITHUB_OUTPUT
+            echo "::notice::Agent merge conflict resolver paused by kill switch"
+            exit 0
+          fi
+          echo "paused=false" >> $GITHUB_OUTPUT
+
+      - name: Comment on PR about conflict resolution attempt
+        if: steps.check-branch.outputs.match == 'true' && steps.check-conflicts.outputs.mergeable == 'CONFLICTING' && steps.kill-switch.outputs.paused != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment ${{ inputs.pr_number }} --body "Merge conflicts detected. Attempting automatic resolution with Claude."
+
+      - name: Resolve merge conflicts
+        if: steps.check-branch.outputs.match == 'true' && steps.check-conflicts.outputs.mergeable == 'CONFLICTING' && steps.kill-switch.outputs.paused != 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: |
+            --allowedTools "Bash,Edit,Write,Read,Glob,Grep"
+          prompt: |
+            You are an Agent Merge Conflict Resolver for PR #${{ inputs.pr_number }}.
+            ${{ inputs.agent_prompt }}
+
+            ## Your Task
+            This PR branch `${{ inputs.head_branch }}` has merge conflicts with `${{ inputs.base_branch }}`.
+            You must resolve these conflicts, verify the result, and push.
+
+            ## Steps
+            1. Fetch the latest base branch:
+               ```
+               git fetch origin ${{ inputs.base_branch }}
+               ```
+
+            2. Attempt to merge the base branch into this branch:
+               ```
+               git merge origin/${{ inputs.base_branch }}
+               ```
+
+            3. If there are conflicts, examine each conflicted file:
+               - Use `git diff --name-only --diff-filter=U` to list conflicted files
+               - Read each file and understand BOTH sides of the conflict
+               - Resolve conflicts by keeping the correct combination of changes
+               - The PR branch changes should generally be preserved while incorporating base branch updates
+               - For lockfiles or generated files, prefer regenerating them
+
+            4. After resolving all conflicts:
+               - Stage the resolved files: `git add <files>`
+               - Complete the merge: `git commit --no-edit`
+
+            5. Verify everything works:
+               - `${{ inputs.install_command }}`
+               - `${{ inputs.typecheck_command }}`
+               - `${{ inputs.lint_command }}`
+               - `${{ inputs.build_command }}`
+
+            6. If any checks fail, fix the issues and re-run ALL checks
+
+            7. Push the resolved merge: `git push`
+
+            ## Important Rules
+            - NEVER force push or rewrite history
+            - Preserve the intent of BOTH the PR changes and the base branch changes
+            - If a conflict is too complex or ambiguous to resolve safely, do NOT guess — leave the file and explain what you couldn't resolve
+            - For lockfiles (package-lock.json, pnpm-lock.yaml, yarn.lock), delete the file and regenerate with the install command
+            - ALWAYS run all checks after resolving conflicts — do not push broken code
+
+      - name: Verify resolution
+        id: verify
+        if: steps.check-branch.outputs.match == 'true' && steps.check-conflicts.outputs.mergeable == 'CONFLICTING' && steps.kill-switch.outputs.paused != 'true' && always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Give GitHub time to recompute mergeable status
+          sleep 10
+          MERGEABLE=$(gh pr view ${{ inputs.pr_number }} --json mergeable --jq '.mergeable' 2>/dev/null || echo "UNKNOWN")
+          echo "mergeable=$MERGEABLE" >> $GITHUB_OUTPUT
+
+          ISSUE_NUM=$(gh pr view ${{ inputs.pr_number }} --json body --jq '.body' | grep -oEi '(close[sd]?|fix(es|ed)?|resolve[sd]?)\s*#([0-9]+)' | grep -oE '[0-9]+' | head -1 || true)
+          echo "issue_number=$ISSUE_NUM" >> $GITHUB_OUTPUT
+
+          if [ "$MERGEABLE" == "CONFLICTING" ]; then
+            echo "resolved=false" >> $GITHUB_OUTPUT
+          else
+            echo "resolved=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Handle successful resolution
+        if: steps.verify.outputs.resolved == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment ${{ inputs.pr_number }} --body "Merge conflicts have been automatically resolved and all checks pass."
+
+          # Remove needs-human label if present
+          gh pr edit ${{ inputs.pr_number }} --remove-label "needs-human" 2>/dev/null || true
+
+          ISSUE_NUM="${{ steps.verify.outputs.issue_number }}"
+          if [ -n "$ISSUE_NUM" ]; then
+            gh issue edit "$ISSUE_NUM" --remove-label "needs-human" 2>/dev/null || true
+          fi
+
+      - name: Handle failed resolution
+        if: steps.verify.outputs.resolved == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr edit ${{ inputs.pr_number }} --add-label "needs-human" || true
+          gh pr comment ${{ inputs.pr_number }} --body "Automatic merge conflict resolution failed. Human intervention required."
+
+          ISSUE_NUM="${{ steps.verify.outputs.issue_number }}"
+          if [ -n "$ISSUE_NUM" ]; then
+            gh issue edit "$ISSUE_NUM" --add-label "needs-human" || true
+          fi

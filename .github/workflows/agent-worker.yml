@@ -188,9 +188,9 @@ jobs:
 
             if [ "$MERGEABLE" == "CONFLICTING" ]; then
               gh issue edit ${{ inputs.issue_number }} --remove-label "agent:in-progress" --add-label "needs-human" || true
-              gh issue comment ${{ inputs.issue_number }} --body "Created PR $PR_LINK but it has **merge conflicts**. Human intervention required to resolve conflicts." || true
+              gh issue comment ${{ inputs.issue_number }} --body "Created PR $PR_LINK but it has **merge conflicts**. The \`agent-merge-conflict\` workflow will attempt automatic resolution if configured." || true
               gh pr edit "$PR_NUMBER" --add-label "needs-human" || true
-              gh pr comment "$PR_NUMBER" --body "This PR has merge conflicts that require human intervention." || true
+              gh pr comment "$PR_NUMBER" --body "This PR has merge conflicts. If the \`agent-merge-conflict\` workflow is configured, automatic resolution will be attempted." || true
             else
               gh issue edit ${{ inputs.issue_number }} --remove-label "agent:in-progress" --add-label "agent:done" || true
               gh issue comment ${{ inputs.issue_number }} --body "Created PR: $PR_LINK" || true

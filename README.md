@@ -10,6 +10,7 @@ Reusable GitHub Actions workflows for use across multiple repositories.
 | `agent-worker.yml` | Autonomous agent that works on labeled issues |
 | `agent-coordinator.yml` | Scans codebase and creates maintenance issues |
 | `agent-ci-fix.yml` | Auto-fixes CI failures on agent branches |
+| `agent-merge-conflict.yml` | Auto-resolves merge conflicts on agent PRs |
 | `pr-merged-labels.yml` | Adds `released` label to issues when PR merges |
 
 ### Not Reusable (copy into each repo)
@@ -197,11 +198,64 @@ The agent worker enforces strict validation before creating a PR:
 
 ### Merge Conflict Handling
 
-When a PR has merge conflicts, both the **issue** and **PR** are labeled `needs-human`:
+When a PR has merge conflicts, both the **issue** and **PR** are labeled `needs-human`. If the `agent-merge-conflict` workflow is configured, Claude will automatically attempt to resolve the conflicts:
 
-- Issue: `agent:in-progress` → `needs-human`
-- PR: `needs-human` label added
-- A comment is posted explaining human intervention is needed
+1. Detects conflicting mergeable status on an agent PR
+2. Merges the base branch into the PR branch
+3. Resolves conflicts file by file using Claude
+4. Runs all checks (install, typecheck, lint, build) to verify the resolution
+5. Pushes the resolved merge and removes `needs-human` labels on success
+6. Falls back to `needs-human` if automatic resolution fails
+
+To enable automatic conflict resolution, add a caller workflow triggered on `push` to the base branch (see example below).
+
+#### Example: Agent Merge Conflict Resolver
+
+```yaml
+# .github/workflows/agent-merge-conflict.yml
+name: Agent Merge Conflict Resolver
+on:
+  # Trigger when base branch is updated (which may cause conflicts)
+  push:
+    branches: [main]
+
+jobs:
+  check-agent-prs:
+    runs-on: ubuntu-latest
+    outputs:
+      prs: ${{ steps.find-prs.outputs.prs }}
+    steps:
+      - name: Find agent PRs with conflicts
+        id: find-prs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Wait for GitHub to recompute mergeable status
+          sleep 15
+          PRS=$(gh pr list --json number,headRefName,mergeable \
+            --jq '[.[] | select(.mergeable == "CONFLICTING" and (.headRefName | test("^(agent|claude)/")))]')
+          echo "prs=$PRS" >> $GITHUB_OUTPUT
+
+  resolve:
+    needs: check-agent-prs
+    if: needs.check-agent-prs.outputs.prs != '[]' && needs.check-agent-prs.outputs.prs != ''
+    strategy:
+      matrix:
+        pr: ${{ fromJson(needs.check-agent-prs.outputs.prs) }}
+      max-parallel: 1
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      id-token: write
+      actions: read
+    uses: geastwood/github-workflow-templates/.github/workflows/agent-merge-conflict.yml@main
+    with:
+      pr_number: ${{ format('{0}', matrix.pr.number) }}
+      head_branch: ${{ matrix.pr.headRefName }}
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+```
 
 ### CI Fix Retries
 
