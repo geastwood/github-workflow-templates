@@ -10,9 +10,16 @@ Reusable GitHub Actions workflows for use across multiple repositories.
 | `agent-worker.yml` | Autonomous agent that works on labeled issues |
 | `agent-coordinator.yml` | Scans codebase and creates maintenance issues |
 | `agent-ci-fix.yml` | Auto-fixes CI failures on agent branches |
-| `claude.yml` | Responds to `@claude` mentions in issues/PRs |
-| `claude-code-review.yml` | Automated PR code review |
 | `pr-merged-labels.yml` | Adds `released` label to issues when PR merges |
+
+### Not Reusable (copy into each repo)
+
+These workflows rely on `github.event` context that cannot be forwarded via `workflow_call`. Copy them directly into each repo:
+
+| Workflow | Description |
+|----------|-------------|
+| `claude.yml` | Responds to `@claude` mentions — needs original event payload |
+| `claude-code-review.yml` | Automated PR code review — needs PR event context |
 
 ## Setup
 
