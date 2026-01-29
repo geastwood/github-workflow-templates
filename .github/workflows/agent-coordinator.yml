@@ -24,7 +24,7 @@ on:
         type: string
         default: 'all'
     secrets:
-      ANTHROPIC_API_KEY:
+      CLAUDE_CODE_OAUTH_TOKEN:
         required: true
 
 jobs:
@@ -57,7 +57,7 @@ jobs:
         if: steps.kill-switch.outputs.paused != 'true'
         uses: anthropics/claude-code-action@v1
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: |
             You are the Agent Coordinator. Your job is to scan the repository and create GitHub issues for maintenance tasks.
             ${{ inputs.agent_prompt }}
