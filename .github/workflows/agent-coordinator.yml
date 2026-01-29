@@ -133,8 +133,8 @@ jobs:
             Use `gh issue create` to create issues. Use `gh issue list` to check for duplicates.
 
           allowed_tools: |
-            Bash(gh issue:*)
-            Bash(gh api:*)
+            Bash(gh issue *)
+            Bash(gh api *)
             Read
             Glob
             Grep
