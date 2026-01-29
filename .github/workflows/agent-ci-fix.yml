@@ -78,7 +78,7 @@ on:
         type: string
         default: ''
     secrets:
-      CLAUDE_CODE_OAUTH_TOKEN:
+      ANTHROPIC_API_KEY:
         required: true
 
 jobs:
@@ -94,7 +94,6 @@ jobs:
       contents: write
       pull-requests: write
       actions: read
-      id-token: write
 
     steps:
       - name: Check branch prefix
@@ -206,7 +205,7 @@ jobs:
         if: (steps.check-branch.outputs.match != 'false' || inputs.event_name == 'workflow_dispatch') && steps.kill-switch.outputs.paused != 'true' && steps.retry-check.outputs.skip != 'true'
         uses: anthropics/claude-code-action@v1
         with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           allowed_bots: "claude[bot]"
           claude_args: |
             --allowedTools "Bash,Edit,Write,Read,Glob,Grep"

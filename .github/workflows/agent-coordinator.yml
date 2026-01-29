@@ -24,7 +24,7 @@ on:
         type: string
         default: 'all'
     secrets:
-      CLAUDE_CODE_OAUTH_TOKEN:
+      ANTHROPIC_API_KEY:
         required: true
 
 jobs:
@@ -35,7 +35,6 @@ jobs:
       contents: read
       issues: write
       pull-requests: read
-      id-token: write
 
     steps:
       - name: Checkout repository
@@ -57,7 +56,7 @@ jobs:
         if: steps.kill-switch.outputs.paused != 'true'
         uses: anthropics/claude-code-action@v1
         with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           prompt: |
             You are the Agent Coordinator. Your job is to scan the repository and create GitHub issues for maintenance tasks.
             ${{ inputs.agent_prompt }}
@@ -132,9 +131,3 @@ jobs:
 
             Use `gh issue create` to create issues. Use `gh issue list` to check for duplicates.
 
-          allowed_tools: |
-            Bash(gh issue:*)
-            Bash(gh api:*)
-            Read
-            Glob
-            Grep
