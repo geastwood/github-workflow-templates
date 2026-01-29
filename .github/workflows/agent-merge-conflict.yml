@@ -104,23 +104,21 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Poll until GitHub computes mergeable status (can take 30-60s after a push to base branch)
-          for i in 1 2 3 4 5 6; do
-            MERGEABLE=$(gh pr view ${{ inputs.pr_number }} --json mergeable --jq '.mergeable' 2>/dev/null || echo "UNKNOWN")
-            echo "Attempt $i: mergeable=$MERGEABLE"
-            if [ "$MERGEABLE" != "UNKNOWN" ]; then
-              break
-            fi
-            sleep 10
-          done
-          echo "mergeable=$MERGEABLE" >> $GITHUB_OUTPUT
+          MERGEABLE=$(gh pr view ${{ inputs.pr_number }} --json mergeable --jq '.mergeable' 2>/dev/null || echo "UNKNOWN")
+          echo "PR #${{ inputs.pr_number }} mergeable status: $MERGEABLE"
 
-          if [ "$MERGEABLE" != "CONFLICTING" ]; then
-            echo "::notice::PR #${{ inputs.pr_number }} is not conflicting (status: $MERGEABLE). Skipping."
+          # Treat UNKNOWN as CONFLICTING since the caller already verified the conflict.
+          # GitHub's mergeable API is unreliable within workflows — it often returns UNKNOWN
+          # for extended periods after a push to the base branch.
+          if [ "$MERGEABLE" == "MERGEABLE" ]; then
+            echo "::notice::PR #${{ inputs.pr_number }} is already mergeable. Skipping."
+            echo "should_resolve=false" >> $GITHUB_OUTPUT
+          else
+            echo "should_resolve=true" >> $GITHUB_OUTPUT
           fi
 
       - name: Checkout repository
-        if: steps.check-branch.outputs.match == 'true' && steps.check-conflicts.outputs.mergeable == 'CONFLICTING'
+        if: steps.check-branch.outputs.match == 'true' && steps.check-conflicts.outputs.should_resolve == 'true'
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.head_branch }}
@@ -128,26 +126,26 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup pnpm
-        if: steps.check-branch.outputs.match == 'true' && steps.check-conflicts.outputs.mergeable == 'CONFLICTING' && inputs.package_manager == 'pnpm'
+        if: steps.check-branch.outputs.match == 'true' && steps.check-conflicts.outputs.should_resolve == 'true' && inputs.package_manager == 'pnpm'
         uses: pnpm/action-setup@v2
         with:
           version: ${{ inputs.pnpm_version }}
 
       - name: Setup Node.js
-        if: steps.check-branch.outputs.match == 'true' && steps.check-conflicts.outputs.mergeable == 'CONFLICTING'
+        if: steps.check-branch.outputs.match == 'true' && steps.check-conflicts.outputs.should_resolve == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node_version }}
           cache: ${{ inputs.package_manager }}
 
       - name: Set environment variables
-        if: steps.check-branch.outputs.match == 'true' && steps.check-conflicts.outputs.mergeable == 'CONFLICTING' && inputs.env_vars != ''
+        if: steps.check-branch.outputs.match == 'true' && steps.check-conflicts.outputs.should_resolve == 'true' && inputs.env_vars != ''
         run: |
           echo "${{ inputs.env_vars }}" >> $GITHUB_ENV
 
       - name: Check kill switch
         id: kill-switch
-        if: steps.check-branch.outputs.match == 'true' && steps.check-conflicts.outputs.mergeable == 'CONFLICTING'
+        if: steps.check-branch.outputs.match == 'true' && steps.check-conflicts.outputs.should_resolve == 'true'
         run: |
           if [ -f ".github/AGENTS_PAUSED" ]; then
             echo "paused=true" >> $GITHUB_OUTPUT
@@ -157,14 +155,14 @@ jobs:
           echo "paused=false" >> $GITHUB_OUTPUT
 
       - name: Comment on PR about conflict resolution attempt
-        if: steps.check-branch.outputs.match == 'true' && steps.check-conflicts.outputs.mergeable == 'CONFLICTING' && steps.kill-switch.outputs.paused != 'true'
+        if: steps.check-branch.outputs.match == 'true' && steps.check-conflicts.outputs.should_resolve == 'true' && steps.kill-switch.outputs.paused != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh pr comment ${{ inputs.pr_number }} --body "Merge conflicts detected. Attempting automatic resolution with Claude."
 
       - name: Resolve merge conflicts
-        if: steps.check-branch.outputs.match == 'true' && steps.check-conflicts.outputs.mergeable == 'CONFLICTING' && steps.kill-switch.outputs.paused != 'true'
+        if: steps.check-branch.outputs.match == 'true' && steps.check-conflicts.outputs.should_resolve == 'true' && steps.kill-switch.outputs.paused != 'true'
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -219,7 +217,7 @@ jobs:
 
       - name: Verify resolution
         id: verify
-        if: steps.check-branch.outputs.match == 'true' && steps.check-conflicts.outputs.mergeable == 'CONFLICTING' && steps.kill-switch.outputs.paused != 'true' && always()
+        if: steps.check-branch.outputs.match == 'true' && steps.check-conflicts.outputs.should_resolve == 'true' && steps.kill-switch.outputs.paused != 'true' && always()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
