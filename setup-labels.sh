@@ -29,6 +29,7 @@ LABELS=(
   "agent:refactor|E4E669|Code quality / refactoring task"
   "agent:feature|A2EEEF|Feature implementation task"
   "agent:bugfix|D73A4A|Bug fix task"
+  "agent:solved-merge-conflict|0E8A16|Merge conflict auto-resolved by agent"
   "needs-human|B60205|Requires human intervention"
   "ci-passed|0E8A16|All CI checks passed"
   "released|6F42C1|Merged and released"

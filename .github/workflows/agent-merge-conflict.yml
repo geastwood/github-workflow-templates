@@ -252,7 +252,8 @@ jobs:
         run: |
           gh pr comment ${{ inputs.pr_number }} --body "Merge conflicts have been automatically resolved and all checks pass."
 
-          # Remove needs-human label if present
+          # Add solved label and remove needs-human label
+          gh pr edit ${{ inputs.pr_number }} --add-label "agent:solved-merge-conflict" 2>/dev/null || true
           gh pr edit ${{ inputs.pr_number }} --remove-label "needs-human" 2>/dev/null || true
 
           ISSUE_NUM="${{ steps.verify.outputs.issue_number }}"

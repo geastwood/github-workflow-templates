@@ -48,6 +48,7 @@ This creates all required labels:
 | `agent:refactor` | Refactoring task |
 | `agent:feature` | Feature implementation |
 | `agent:bugfix` | Bug fix task |
+| `agent:solved-merge-conflict` | Merge conflict auto-resolved by agent |
 | `needs-human` | Requires human intervention |
 | `ci-passed` | All CI checks passed |
 | `released` | Merged and released |
@@ -204,7 +205,7 @@ When a PR has merge conflicts, both the **issue** and **PR** are labeled `needs-
 2. Merges the base branch into the PR branch
 3. Resolves conflicts file by file using Claude
 4. Runs all checks (install, typecheck, lint, build) to verify the resolution
-5. Pushes the resolved merge and removes `needs-human` labels on success
+5. Pushes the resolved merge, adds `agent:solved-merge-conflict` label, and removes `needs-human` on success
 6. Falls back to `needs-human` if automatic resolution fails
 
 To enable automatic conflict resolution, add a caller workflow triggered on `push` to the base branch (see example below).
@@ -215,13 +216,15 @@ To enable automatic conflict resolution, add a caller workflow triggered on `pus
 # .github/workflows/agent-merge-conflict.yml
 name: Agent Merge Conflict Resolver
 on:
-  # Trigger when base branch is updated (which may cause conflicts)
   push:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
   check-agent-prs:
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
     outputs:
       prs: ${{ steps.find-prs.outputs.prs }}
     steps:
@@ -231,9 +234,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # Wait for GitHub to recompute mergeable status
-          sleep 15
-          PRS=$(gh pr list --json number,headRefName,mergeable \
-            --jq '[.[] | select(.mergeable == "CONFLICTING" and (.headRefName | test("^(agent|claude)/")))]')
+          sleep 30
+          PRS=$(gh pr list --repo ${{ github.repository }} --json number,headRefName,mergeable \
+            --jq '[.[] | select(.mergeable == "CONFLICTING" and (.headRefName | test("^(agent|claude)/")))]' | jq -c .)
+          echo "Found PRs: $PRS"
           echo "prs=$PRS" >> $GITHUB_OUTPUT
 
   resolve:
