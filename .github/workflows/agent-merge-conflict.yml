@@ -104,17 +104,27 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          MERGEABLE=$(gh pr view ${{ inputs.pr_number }} --json mergeable --jq '.mergeable' 2>/dev/null || echo "UNKNOWN")
-          echo "PR #${{ inputs.pr_number }} mergeable status: $MERGEABLE"
+          # Trigger mergeability computation via REST API (returns null/UNKNOWN initially)
+          # then poll GraphQL until GitHub returns a definitive status.
+          # See: https://docs.github.com/en/rest/pulls/pulls
+          gh api repos/${{ github.repository }}/pulls/${{ inputs.pr_number }} --jq '.mergeable' > /dev/null 2>&1 || true
 
-          # Treat UNKNOWN as CONFLICTING since the caller already verified the conflict.
-          # GitHub's mergeable API is unreliable within workflows — it often returns UNKNOWN
-          # for extended periods after a push to the base branch.
-          if [ "$MERGEABLE" == "MERGEABLE" ]; then
-            echo "::notice::PR #${{ inputs.pr_number }} is already mergeable. Skipping."
-            echo "should_resolve=false" >> $GITHUB_OUTPUT
-          else
+          for i in $(seq 1 12); do
+            MERGEABLE=$(gh pr view ${{ inputs.pr_number }} --json mergeable --jq '.mergeable' 2>/dev/null || echo "UNKNOWN")
+            echo "Attempt $i: mergeable=$MERGEABLE"
+            if [ "$MERGEABLE" != "UNKNOWN" ]; then
+              break
+            fi
+            sleep 10
+          done
+
+          echo "should_resolve=false" >> $GITHUB_OUTPUT
+          if [ "$MERGEABLE" == "CONFLICTING" ]; then
             echo "should_resolve=true" >> $GITHUB_OUTPUT
+          elif [ "$MERGEABLE" == "MERGEABLE" ]; then
+            echo "::notice::PR #${{ inputs.pr_number }} is already mergeable. Skipping."
+          else
+            echo "::warning::PR #${{ inputs.pr_number }} mergeable status is $MERGEABLE after 12 attempts. Skipping."
           fi
 
       - name: Checkout repository
